@@ -27,3 +27,5 @@ results/*.json
 .DS_Store
 .vscode/
 .idea/
+
+*:Zone.Identifier
