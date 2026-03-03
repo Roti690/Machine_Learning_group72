@@ -42,6 +42,22 @@ python scripts/run_mnist_size_study.py \
   --seed 42
 ```
 
+## GUI trainer
+
+You can run a local GUI where you choose:
+
+- number of hidden layers
+- size (units) for each hidden layer
+- epochs, batch size, learning rate, validation split, and seed
+
+Launch:
+
+```bash
+python scripts/mnist_gui_trainer.py
+```
+
+Then click `Train Network` to start training and view test accuracy/loss/params in the app.
+
 ## Outputs
 
 After each run, the script writes:
