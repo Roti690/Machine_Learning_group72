@@ -27,7 +27,16 @@ class TrainResult:
     trainable_params: int
     test_loss: float
     test_accuracy: float
+    test_f1_macro: float
+    per_class_metrics: list["PerClassMetric"]
     elapsed_seconds: float
+
+
+@dataclass
+class PerClassMetric:
+    digit: int
+    accuracy: float
+    f1: float
 
 
 def set_seed(seed: int) -> None:
@@ -66,6 +75,32 @@ def build_model(hidden_layers: list[int], learning_rate: float) -> keras.Model:
         metrics=["accuracy"],
     )
     return model
+
+
+def compute_class_metrics(
+    y_true: np.ndarray,
+    y_pred_probs: np.ndarray,
+    num_classes: int = 10,
+) -> tuple[float, list[PerClassMetric]]:
+    y_true_labels = np.argmax(y_true, axis=1)
+    y_pred_labels = np.argmax(y_pred_probs, axis=1)
+
+    metrics: list[PerClassMetric] = []
+    f1_values: list[float] = []
+    for class_id in range(num_classes):
+        true_pos = np.sum((y_true_labels == class_id) & (y_pred_labels == class_id))
+        false_pos = np.sum((y_true_labels != class_id) & (y_pred_labels == class_id))
+        false_neg = np.sum((y_true_labels == class_id) & (y_pred_labels != class_id))
+        support = np.sum(y_true_labels == class_id)
+
+        precision = true_pos / (true_pos + false_pos) if (true_pos + false_pos) > 0 else 0.0
+        recall = true_pos / (true_pos + false_neg) if (true_pos + false_neg) > 0 else 0.0
+        f1 = (2.0 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+        class_accuracy = true_pos / support if support > 0 else 0.0
+        metrics.append(PerClassMetric(digit=class_id, accuracy=class_accuracy, f1=f1))
+        f1_values.append(f1)
+
+    return float(np.mean(f1_values)), metrics
 
 
 class EpochLogger(keras.callbacks.Callback):
@@ -174,8 +209,13 @@ class MnistTrainerApp:
         results.pack(fill="x", pady=(0, 10))
         results.pack_propagate(False)
         results.configure(height=130)
-        self.result_box = tk.Text(results, height=5, wrap="word", state="disabled")
-        self.result_box.pack(fill="both", expand=True)
+        result_container = ttk.Frame(results)
+        result_container.pack(fill="both", expand=True)
+        self.result_box = tk.Text(result_container, height=5, wrap="word", state="disabled")
+        result_scroll = ttk.Scrollbar(result_container, orient="vertical", command=self.result_box.yview)
+        self.result_box.configure(yscrollcommand=result_scroll.set)
+        self.result_box.pack(side="left", fill="both", expand=True)
+        result_scroll.pack(side="right", fill="y")
         self._set_result_text("No run yet.")
 
         logs = ttk.LabelFrame(outer, text="Training Log", padding=10)
@@ -304,6 +344,8 @@ class MnistTrainerApp:
                 callbacks=[EpochLogger(self.queue)],
             )
             test_loss, test_accuracy = model.evaluate(self.x_test, self.y_test, verbose=0)
+            y_pred_probs = model.predict(self.x_test, verbose=0)
+            test_f1_macro, per_class_metrics = compute_class_metrics(self.y_test, y_pred_probs, num_classes=10)
             elapsed = time.perf_counter() - start
 
             result = TrainResult(
@@ -311,6 +353,8 @@ class MnistTrainerApp:
                 trainable_params=model.count_params(),
                 test_loss=float(test_loss),
                 test_accuracy=float(test_accuracy),
+                test_f1_macro=test_f1_macro,
+                per_class_metrics=per_class_metrics,
                 elapsed_seconds=elapsed,
             )
             self.queue.put(("done", result))
@@ -332,21 +376,34 @@ class MnistTrainerApp:
                     continue
                 self.status_var.set("Ready.")
                 self._set_busy(False)
+                class_lines = "\n".join(
+                    f"Digit {metric.digit}: accuracy={metric.accuracy:.4f}, f1={metric.f1:.4f}"
+                    for metric in result.per_class_metrics
+                )
                 self._set_result_text(
                     "Hidden layers: "
                     f"{result.hidden_layers}\n"
                     f"Trainable params: {result.trainable_params}\n"
                     f"Test accuracy: {result.test_accuracy:.4f}\n"
+                    f"Test macro F1: {result.test_f1_macro:.4f}\n"
                     f"Test loss: {result.test_loss:.4f}\n"
-                    f"Elapsed: {result.elapsed_seconds:.2f}s"
+                    f"Elapsed: {result.elapsed_seconds:.2f}s\n"
+                    "Per-digit metrics (accuracy, F1):\n"
+                    f"{class_lines}"
                 )
                 self._append_log(
                     "Finished. "
                     f"accuracy={result.test_accuracy:.4f}, "
+                    f"macro_f1={result.test_f1_macro:.4f}, "
                     f"loss={result.test_loss:.4f}, "
                     f"params={result.trainable_params}, "
                     f"time={result.elapsed_seconds:.2f}s"
                 )
+                self._append_log("Per-digit metrics (accuracy, F1):")
+                for metric in result.per_class_metrics:
+                    self._append_log(
+                        f"Digit {metric.digit}: accuracy={metric.accuracy:.4f}, f1={metric.f1:.4f}"
+                    )
             elif kind == "error":
                 self.status_var.set("Failed.")
                 self._set_busy(False)
