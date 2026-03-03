@@ -57,6 +57,8 @@ python scripts/mnist_gui_trainer.py
 ```
 
 Then click `Train Network` to start training and view test accuracy/loss/params in the app.
+Each training run also saves a slide-ready per-class F1 chart PNG in `results/`
+(filename like `mnist_f1_per_class_128x64_YYYYMMDD_HHMMSS.png`).
 
 ## Outputs
 

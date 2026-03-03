@@ -1,1 +1,2 @@
 tensorflow>=2.16
+matplotlib>=3.8

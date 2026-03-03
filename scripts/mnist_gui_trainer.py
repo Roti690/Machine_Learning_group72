@@ -14,11 +14,17 @@ import threading
 import time
 import tkinter as tk
 from dataclasses import dataclass
+from pathlib import Path
 from tkinter import messagebox, ttk
 
+import matplotlib
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator, PercentFormatter
 
 
 @dataclass
@@ -29,6 +35,7 @@ class TrainResult:
     test_accuracy: float
     test_f1_macro: float
     per_class_metrics: list["PerClassMetric"]
+    f1_plot_path: str
     elapsed_seconds: float
 
 
@@ -101,6 +108,85 @@ def compute_class_metrics(
         f1_values.append(f1)
 
     return float(np.mean(f1_values)), metrics
+
+
+def save_per_class_f1_plot(
+    metrics: list[PerClassMetric],
+    hidden_layers: list[int],
+    macro_f1: float,
+    output_dir: Path,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    layers_label = "x".join(str(units) for units in hidden_layers)
+    image_path = output_dir / f"mnist_f1_per_class_{layers_label}_{timestamp}.png"
+
+    digits = [metric.digit for metric in metrics]
+    f1_scores = [metric.f1 for metric in metrics]
+    colors = plt.cm.Blues(np.linspace(0.45, 0.85, len(metrics)))
+    min_f1 = min(f1_scores)
+    max_f1 = max(f1_scores)
+    spread = max_f1 - min_f1
+
+    # Zoom the Y-axis around the observed range so small differences are visible on slides.
+    pad = max(0.01, spread * 0.30)
+    y_min = max(0.0, min_f1 - pad)
+    y_max = min(1.0, max_f1 + pad)
+    if (y_max - y_min) < 0.05:
+        mid = (y_min + y_max) / 2.0
+        y_min = max(0.0, mid - 0.025)
+        y_max = min(1.0, mid + 0.025)
+
+    fig, ax = plt.subplots(figsize=(13.33, 7.5), dpi=150)
+    fig.patch.set_facecolor("#eef2f8")
+    ax.set_facecolor("#ffffff")
+
+    bars = ax.bar(digits, f1_scores, color=colors, edgecolor="#1f3b63", linewidth=1.0)
+    ax.axhline(macro_f1, color="#c44e52", linewidth=2.0, linestyle="--", label=f"Macro F1 = {macro_f1:.3f}")
+
+    ax.set_ylim(y_min, y_max)
+    ax.set_xticks(digits)
+    ax.set_xlabel("Digit Class", fontsize=13)
+    ax.set_ylabel("F1 Score", fontsize=13)
+    ax.yaxis.set_major_locator(MaxNLocator(nbins=8))
+    ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=1))
+    ax.grid(axis="y", linestyle=":", linewidth=0.9, alpha=0.55)
+    ax.set_axisbelow(True)
+    ax.set_title(
+        f"MNIST Per-Class F1 Scores (Shape: {hidden_layers})",
+        fontsize=18,
+        pad=16,
+        weight="bold",
+    )
+    ax.legend(loc="lower right", frameon=True)
+    ax.text(
+        0.01,
+        0.98,
+        "Y-axis zoomed to highlight differences",
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=10,
+        color="#334155",
+        bbox={"facecolor": "#ffffff", "alpha": 0.8, "edgecolor": "#cbd5e1"},
+    )
+
+    label_offset = max((y_max - y_min) * 0.02, 0.002)
+    for bar, value in zip(bars, f1_scores):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            value + label_offset,
+            f"{value:.4f}",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+            color="#1f2937",
+        )
+
+    fig.tight_layout()
+    fig.savefig(image_path, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    return image_path
 
 
 class EpochLogger(keras.callbacks.Callback):
@@ -346,6 +432,12 @@ class MnistTrainerApp:
             test_loss, test_accuracy = model.evaluate(self.x_test, self.y_test, verbose=0)
             y_pred_probs = model.predict(self.x_test, verbose=0)
             test_f1_macro, per_class_metrics = compute_class_metrics(self.y_test, y_pred_probs, num_classes=10)
+            plot_path = save_per_class_f1_plot(
+                metrics=per_class_metrics,
+                hidden_layers=hidden_layers,
+                macro_f1=test_f1_macro,
+                output_dir=Path("results"),
+            )
             elapsed = time.perf_counter() - start
 
             result = TrainResult(
@@ -355,6 +447,7 @@ class MnistTrainerApp:
                 test_accuracy=float(test_accuracy),
                 test_f1_macro=test_f1_macro,
                 per_class_metrics=per_class_metrics,
+                f1_plot_path=str(plot_path),
                 elapsed_seconds=elapsed,
             )
             self.queue.put(("done", result))
@@ -388,6 +481,7 @@ class MnistTrainerApp:
                     f"Test macro F1: {result.test_f1_macro:.4f}\n"
                     f"Test loss: {result.test_loss:.4f}\n"
                     f"Elapsed: {result.elapsed_seconds:.2f}s\n"
+                    f"F1 chart: {result.f1_plot_path}\n"
                     "Per-digit metrics (accuracy, F1):\n"
                     f"{class_lines}"
                 )
@@ -399,6 +493,7 @@ class MnistTrainerApp:
                     f"params={result.trainable_params}, "
                     f"time={result.elapsed_seconds:.2f}s"
                 )
+                self._append_log(f"Saved F1 chart: {result.f1_plot_path}")
                 self._append_log("Per-digit metrics (accuracy, F1):")
                 for metric in result.per_class_metrics:
                     self._append_log(

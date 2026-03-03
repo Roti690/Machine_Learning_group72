@@ -21,6 +21,7 @@ env/
 # Local artifacts
 results/*.csv
 results/*.json
+results/*.png
 !results/.gitkeep
 
 # OS/editor files
